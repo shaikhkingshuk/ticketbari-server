@@ -38,12 +38,42 @@ async function run() {
       try {
         const userData = req.body;
 
-        const result = await userCollection.insertOne(userData);
+        const userExist = await userCollection.findOne({
+          email: userData.email,
+        });
+        console.log("called................");
+
+        if (userExist) {
+          return res.status(409).json({
+            message: "Email already exists",
+          });
+        }
+
+        const result = await userCollection.insertOne({
+          ...userData,
+          role: "user",
+        });
 
         res.status(201).json({
           message: "User created successfully",
           insertedId: result.insertedId,
         });
+      } catch (error) {
+        res.status(500).json({ error: error.message });
+      }
+    });
+
+    app.get("/users/:email", async (req, res) => {
+      try {
+        const email = req.params.email;
+
+        const user = await userCollection.findOne({ email });
+
+        if (!user) {
+          return res.json(null); // 👈 important
+        }
+
+        res.json(user);
       } catch (error) {
         res.status(500).json({ error: error.message });
       }
