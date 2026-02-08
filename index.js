@@ -23,6 +23,7 @@ async function run() {
 
     const db = client.db(process.env.DB_NAME);
     const userCollection = db.collection("users");
+    const ticketCollection = db.collection("tickets");
 
     app.listen(process.env.PORT || 3000, () => {
       console.log(
@@ -70,10 +71,59 @@ async function run() {
         const user = await userCollection.findOne({ email });
 
         if (!user) {
-          return res.json(null); // 👈 important
+          return res.json(null);
         }
 
         res.json(user);
+      } catch (error) {
+        res.status(500).json({ error: error.message });
+      }
+    });
+
+    // adding tickets
+
+    app.post("/tickets", async (req, res) => {
+      try {
+        const ticket = req.body;
+
+        const newTicket = {
+          title: ticket.title,
+          from: ticket.from,
+          to: ticket.to,
+          transportType: ticket.transportType,
+          price: ticket.price,
+          quantity: ticket.quantity,
+          departureDateTime: ticket.departureDateTime,
+          perks: ticket.perks, // array
+          image: ticket.image,
+          vendorName: ticket.vendorName,
+          vendorEmail: ticket.vendorEmail,
+          verificationStatus: "pending",
+          createdAt: new Date(),
+        };
+
+        const result = await ticketCollection.insertOne(newTicket);
+
+        res.status(201).json({
+          message: "Ticket added successfully",
+          insertedId: result.insertedId,
+        });
+      } catch (error) {
+        res.status(500).json({ error: error.message });
+      }
+    });
+
+    // getting my added tickets
+
+    app.get("/tickets/vendor/:email", async (req, res) => {
+      try {
+        const email = req.params.email;
+
+        const tickets = await ticketCollection
+          .find({ vendorEmail: email })
+          .toArray();
+
+        res.json(tickets);
       } catch (error) {
         res.status(500).json({ error: error.message });
       }
