@@ -128,6 +128,28 @@ async function run() {
         res.status(500).json({ error: error.message });
       }
     });
+
+    const { ObjectId } = require("mongodb");
+
+    // deleting tickets
+
+    app.delete("/tickets/:id", async (req, res) => {
+      try {
+        const id = req.params.id;
+
+        const result = await ticketCollection.deleteOne({
+          _id: new ObjectId(id),
+        });
+
+        if (result.deletedCount === 0) {
+          return res.status(404).json({ message: "Ticket not found" });
+        }
+
+        res.json({ message: "Ticket deleted successfully" });
+      } catch (error) {
+        res.status(500).json({ error: error.message });
+      }
+    });
   } finally {
     // Ensures that the client will close when you finish/error
     // await client.close();
