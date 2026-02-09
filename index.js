@@ -262,6 +262,23 @@ async function run() {
         res.status(500).json({ error: error.message });
       }
     });
+
+    /// for accepting tickets
+
+    app.patch("/bookings/accept/:id", async (req, res) => {
+      const id = req.params.id;
+
+      const result = await bookedTicketCollection.updateOne(
+        { _id: new ObjectId(id) },
+        { $set: { status: "accepted" } },
+      );
+
+      if (!result.matchedCount) {
+        return res.status(404).json({ message: "Booking not found" });
+      }
+
+      res.json({ message: "Booking accepted" });
+    });
   } finally {
     // Ensures that the client will close when you finish/error
     // await client.close();
