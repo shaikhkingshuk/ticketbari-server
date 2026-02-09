@@ -5,6 +5,7 @@ require("dotenv").config();
 app.use(cors());
 app.use(express.json());
 const { MongoClient, ServerApiVersion } = require("mongodb");
+const stripe = require("stripe")(process.env.STRIPE_SECRET_KEY);
 
 const PORT = process.env.PORT || 3000;
 const uri = `mongodb+srv://${process.env.DB_USER}:${process.env.DB_PASS}@cluster0.jehcuf6.mongodb.net/?appName=Cluster0`;
@@ -25,12 +26,6 @@ async function run() {
     const userCollection = db.collection("users");
     const ticketCollection = db.collection("tickets");
     const bookedTicketCollection = db.collection("bookedTickets");
-
-    app.listen(process.env.PORT || 3000, () => {
-      console.log(
-        `Server running on http://localhost:${process.env.PORT || 3000}`,
-      );
-    });
 
     console.log(
       "Pinged your deployment. You successfully connected to MongoDB!",
@@ -213,11 +208,6 @@ async function run() {
       try {
         const booking = req.body;
 
-        await ticketCollection.updateOne(
-          { _id: new ObjectId(booking.ticketId) },
-          { $inc: { quantity: -booking.bookedQuantity } },
-        );
-
         const result = await bookedTicketCollection.insertOne({
           ...booking,
           status: "pending",
@@ -295,6 +285,163 @@ async function run() {
       }
 
       res.json({ message: "Booking rejected" });
+    });
+
+    // GET My Booked Tickets (User)
+    app.get("/bookedTickets/user/:email", async (req, res) => {
+      const email = req.params.email;
+
+      const bookings = await bookedTicketCollection
+        .find({ userEmail: email })
+        .sort({ bookedAt: -1 })
+        .toArray();
+
+      const ticketIds = bookings.map((b) => new ObjectId(b.ticketId));
+
+      const tickets = await ticketCollection
+        .find({ _id: { $in: ticketIds } })
+        .toArray();
+
+      const ticketMap = {};
+      tickets.forEach((t) => {
+        ticketMap[t._id.toString()] = t;
+      });
+
+      const finalData = bookings.map((b) => ({
+        ...b,
+        ticket: ticketMap[b.ticketId],
+      }));
+
+      res.json(finalData);
+    });
+
+    app.post("/create-checkout-session", async (req, res) => {
+      const { bookingId, title, price, quantity, ticketId } = req.body;
+
+      try {
+        const session = await stripe.checkout.sessions.create({
+          payment_method_types: ["card"], // Visa, Mastercard, etc.
+          mode: "payment",
+          line_items: [
+            {
+              price_data: {
+                currency: "bdt",
+                product_data: {
+                  name: title,
+                },
+                unit_amount: price * 100, // cents
+              },
+              quantity,
+            },
+          ],
+          success_url: `http://localhost:5173/payment-success?bookingId=${bookingId}&ticketId=${ticketId}&quantity=${quantity}`,
+          cancel_url: `http://localhost:5173/payment-cancel`,
+        });
+
+        res.json({ url: session.url });
+      } catch (error) {
+        res.status(500).json({ error: error.message });
+      }
+    });
+
+    app.patch("/bookings/pay/:id", async (req, res) => {
+      const id = req.params.id;
+      const { ticketId, bookedQuantity, transactionId } = req.body;
+
+      await bookedTicketCollection.updateOne(
+        { _id: new ObjectId(id) },
+        {
+          $set: {
+            status: "paid",
+            paidAt: new Date(),
+            transactionId, // ✅ store Stripe transaction ID
+          },
+        },
+      );
+
+      await ticketCollection.updateOne(
+        { _id: new ObjectId(ticketId) },
+        { $inc: { quantity: -bookedQuantity } },
+      );
+
+      res.json({ message: "Payment successful" });
+    });
+
+    app.get("/transactions/user/:email", async (req, res) => {
+      const email = req.params.email;
+
+      const transactions = await bookedTicketCollection
+        .find({
+          userEmail: email,
+          status: "paid",
+        })
+        .sort({ paidAt: -1 })
+        .toArray();
+
+      res.json(transactions);
+    });
+
+    // Revenue Overview (Vendor)
+    app.get("/vendor/revenue-overview", async (req, res) => {
+      try {
+        const vendorEmail = req.query.email;
+
+        if (!vendorEmail) {
+          return res.status(400).json({ message: "Vendor email required" });
+        }
+
+        // Vendor tickets
+        const tickets = await ticketCollection
+          .find({ vendorEmail })
+          .project({ _id: 1 })
+          .toArray();
+
+        const ticketIds = tickets.map((t) => t._id.toString());
+
+        // Paid bookings
+        const paidBookings = await bookedTicketCollection
+          .find({
+            ticketId: { $in: ticketIds },
+            status: "paid",
+          })
+          .toArray();
+
+        const totalRevenue = paidBookings.reduce(
+          (sum, b) => sum + b.price * b.bookedQuantity,
+          0,
+        );
+
+        const totalTicketsSold = paidBookings.reduce(
+          (sum, b) => sum + b.bookedQuantity,
+          0,
+        );
+
+        const totalTicketsAdded = tickets.length;
+
+        // Chart data (group by date)
+        const revenueByDate = {};
+
+        paidBookings.forEach((b) => {
+          const date = new Date(b.paidAt).toLocaleDateString();
+          revenueByDate[date] =
+            (revenueByDate[date] || 0) + b.price * b.bookedQuantity;
+        });
+
+        res.json({
+          totalRevenue,
+          totalTicketsSold,
+          totalTicketsAdded,
+          revenueChart: revenueByDate,
+        });
+      } catch (error) {
+        res.status(500).json({ error: error.message });
+      }
+    });
+
+    app.listen(process.env.PORT || 3000, () => {
+      console.log(
+        `Server running on http://localhost:${process.env.PORT || 3000}`,
+      );
     });
   } finally {
     // Ensures that the client will close when you finish/error
