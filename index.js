@@ -232,6 +232,36 @@ async function run() {
         res.status(500).json({ error: error.message });
       }
     });
+
+    //vendor getting all booked tickets list
+
+    app.get("/vendor/bookings", async (req, res) => {
+      try {
+        const vendorEmail = req.query.email;
+
+        if (!vendorEmail) {
+          return res.status(400).json({ message: "Vendor email required" });
+        }
+
+        // Get vendor tickets first
+        const vendorTickets = await ticketCollection
+          .find({ vendorEmail })
+          .project({ _id: 1 })
+          .toArray();
+
+        const ticketIds = vendorTickets.map((t) => t._id.toString());
+
+        // Find bookings for those tickets
+        const bookings = await bookedTicketCollection
+          .find({ ticketId: { $in: ticketIds } })
+          .sort({ bookedAt: -1 })
+          .toArray();
+
+        res.json(bookings);
+      } catch (error) {
+        res.status(500).json({ error: error.message });
+      }
+    });
   } finally {
     // Ensures that the client will close when you finish/error
     // await client.close();
