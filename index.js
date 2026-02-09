@@ -24,6 +24,7 @@ async function run() {
     const db = client.db(process.env.DB_NAME);
     const userCollection = db.collection("users");
     const ticketCollection = db.collection("tickets");
+    const bookedTicketCollection = db.collection("bookedTickets");
 
     app.listen(process.env.PORT || 3000, () => {
       console.log(
@@ -173,6 +174,60 @@ async function run() {
         }
 
         res.json({ message: "Ticket updated successfully" });
+      } catch (error) {
+        res.status(500).json({ error: error.message });
+      }
+    });
+
+    // GET all approved tickets
+    app.get("/tickets", async (req, res) => {
+      try {
+        const tickets = await ticketCollection
+          .find({ verificationStatus: "approved" })
+          .toArray();
+
+        res.json(tickets);
+      } catch (error) {
+        res.status(500).json({ error: error.message });
+      }
+    });
+
+    // getting single ticket details
+    app.get("/tickets/:id", async (req, res) => {
+      try {
+        const ticket = await ticketCollection.findOne({
+          _id: new ObjectId(req.params.id),
+        });
+
+        if (!ticket) {
+          return res.status(404).json({ message: "Ticket not found" });
+        }
+
+        res.json(ticket);
+      } catch (error) {
+        res.status(500).json({ error: error.message });
+      }
+    });
+
+    app.post("/bookings", async (req, res) => {
+      try {
+        const booking = req.body;
+
+        await ticketCollection.updateOne(
+          { _id: new ObjectId(booking.ticketId) },
+          { $inc: { quantity: -booking.bookedQuantity } },
+        );
+
+        const result = await bookedTicketCollection.insertOne({
+          ...booking,
+          status: "pending",
+          bookedAt: new Date(),
+        });
+
+        res.status(201).json({
+          message: "Booking successful",
+          insertedId: result.insertedId,
+        });
       } catch (error) {
         res.status(500).json({ error: error.message });
       }
