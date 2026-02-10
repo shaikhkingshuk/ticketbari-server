@@ -26,6 +26,7 @@ async function run() {
     const userCollection = db.collection("users");
     const ticketCollection = db.collection("tickets");
     const bookedTicketCollection = db.collection("bookedTickets");
+    const homepageAdsCollection = db.collection("homepageAds");
 
     console.log(
       "Pinged your deployment. You successfully connected to MongoDB!",
@@ -80,6 +81,15 @@ async function run() {
 
     app.post("/tickets", async (req, res) => {
       try {
+        const vendor = await userCollection.findOne({
+          email: req.body.vendorEmail,
+        });
+
+        if (vendor?.isFraud) {
+          return res.status(403).json({
+            message: "Fraud vendors cannot add tickets",
+          });
+        }
         const ticket = req.body;
 
         const newTicket = {
@@ -90,11 +100,13 @@ async function run() {
           price: ticket.price,
           quantity: ticket.quantity,
           departureDateTime: ticket.departureDateTime,
-          perks: ticket.perks, // array
+          perks: ticket.perks,
           image: ticket.image,
           vendorName: ticket.vendorName,
           vendorEmail: ticket.vendorEmail,
           verificationStatus: "pending",
+          isHidden: false,
+          isAdvertised: false,
           createdAt: new Date(),
         };
 
@@ -176,15 +188,14 @@ async function run() {
 
     // GET all approved tickets
     app.get("/tickets", async (req, res) => {
-      try {
-        const tickets = await ticketCollection
-          .find({ verificationStatus: "approved" })
-          .toArray();
+      const tickets = await ticketCollection
+        .find({
+          verificationStatus: "approved",
+          isHidden: false,
+        })
+        .toArray();
 
-        res.json(tickets);
-      } catch (error) {
-        res.status(500).json({ error: error.message });
-      }
+      res.json(tickets);
     });
 
     // getting single ticket details
@@ -438,17 +449,20 @@ async function run() {
       }
     });
 
-    // GET all tickets (admin)
-    app.get("/tickets", async (req, res) => {
+    // // GET all tickets (admin)
+
+    // GET all tickets (ADMIN)
+    app.get("/admin/tickets", async (req, res) => {
       const tickets = await ticketCollection
         .find()
         .sort({ createdAt: -1 })
         .toArray();
-      res.send(tickets);
+
+      res.json(tickets);
     });
 
-    // Approve or Reject ticket
-    app.patch("/tickets/:id", async (req, res) => {
+    // Approve or Reject ticket (ADMIN)
+    app.patch("/admin/tickets/:id", async (req, res) => {
       const { status } = req.body; // approved | rejected
       const id = req.params.id;
 
@@ -462,7 +476,234 @@ async function run() {
         },
       );
 
-      res.send(result);
+      res.json(result);
+    });
+
+    // app.get("/tickets", async (req, res) => {
+    //   const tickets = await ticketCollection
+    //     .find()
+    //     .sort({ createdAt: -1 })
+    //     .toArray();
+    //   res.send(tickets);
+    // });
+
+    // // Approve or Reject ticket
+    // app.patch("/tickets/:id", async (req, res) => {
+    //   const { status } = req.body; // approved | rejected
+    //   const id = req.params.id;
+
+    //   const result = await ticketCollection.updateOne(
+    //     { _id: new ObjectId(id) },
+    //     {
+    //       $set: {
+    //         verificationStatus: status,
+    //         updatedAt: new Date(),
+    //       },
+    //     },
+    //   );
+
+    //   res.send(result);
+    // });
+
+    // getting user info for making admin/vendor
+
+    app.get("/users", async (req, res) => {
+      const users = await userCollection.find().toArray();
+      res.json(users);
+    });
+
+    app.patch("/users/role/:id", async (req, res) => {
+      const { role } = req.body;
+      const id = req.params.id;
+
+      const result = await userCollection.updateOne(
+        { _id: new ObjectId(id) },
+        {
+          $set: {
+            role,
+            isFraud: false,
+          },
+        },
+      );
+
+      res.json(result);
+    });
+
+    app.patch("/users/fraud/:id", async (req, res) => {
+      const id = req.params.id;
+      const user = await userCollection.findOne({ _id: new ObjectId(id) });
+
+      if (!user || user.role !== "vendor") {
+        return res
+          .status(400)
+          .json({ message: "Only vendors can be marked fraud" });
+      }
+
+      // 1. Mark user as fraud
+      await userCollection.updateOne(
+        { _id: new ObjectId(id) },
+        {
+          $set: {
+            role: "fraud",
+            isFraud: true,
+          },
+        },
+      );
+
+      // 2. Hide all vendor tickets
+      await ticketCollection.updateMany(
+        { vendorEmail: user.email },
+        {
+          $set: { isHidden: true },
+        },
+      );
+
+      res.json({ message: "Vendor marked as fraud & tickets hidden" });
+    });
+
+    // for advertising purpose///////////////////////////////////////////////////////////////////////////////////////////////////
+
+    // Admin selects 6 tickets for homepage ads
+    // app.post("/admin/homepage-ads", async (req, res) => {
+    //   try {
+    //     const { ticketIds } = req.body; // array of 6 ticket _id strings
+
+    //     if (!ticketIds || ticketIds.length !== 6) {
+    //       return res
+    //         .status(400)
+    //         .json({ message: "Exactly 6 ticket IDs required" });
+    //     }
+
+    //     // Remove existing ads
+    //     await homepageAdsCollection.deleteMany({});
+
+    //     // Insert new ads
+    //     const result = await homepageAdsCollection.insertOne({
+    //       ticketIds,
+    //       createdAt: new Date(),
+    //     });
+
+    //     res.status(201).json({
+    //       message: "Homepage ads updated",
+    //       insertedId: result.insertedId,
+    //     });
+    //   } catch (error) {
+    //     res.status(500).json({ error: error.message });
+    //   }
+    // });
+
+    // // Get homepage advertisement tickets
+    // app.get("/homepage/ads", async (req, res) => {
+    //   try {
+    //     const ads = await homepageAdsCollection.findOne(
+    //       {},
+    //       { sort: { createdAt: -1 } },
+    //     );
+
+    //     if (!ads) return res.json([]);
+
+    //     const ticketObjectIds = ads.ticketIds.map((id) => new ObjectId(id));
+
+    //     const tickets = await ticketCollection
+    //       .find({
+    //         _id: { $in: ticketObjectIds },
+    //         verificationStatus: "approved",
+    //         isHidden: false,
+    //       })
+    //       .toArray();
+
+    //     res.json(tickets);
+    //   } catch (error) {
+    //     res.status(500).json({ error: error.message });
+    //   }
+    // });
+
+    // Get latest tickets for homepage
+    // app.get("/homepage/latest-tickets", async (req, res) => {
+    //   try {
+    //     const tickets = await ticketCollection
+    //       .find({ verificationStatus: "approved", isHidden: false })
+    //       .sort({ createdAt: -1 })
+    //       .limit(8)
+    //       .toArray();
+
+    //     res.json(tickets);
+    //   } catch (error) {
+    //     res.status(500).json({ error: error.message });
+    //   }
+    // });
+
+    app.get("/homepage/ads", async (req, res) => {
+      try {
+        const tickets = await ticketCollection
+          .find({
+            isAdvertised: true,
+            verificationStatus: "approved",
+            isHidden: false,
+          })
+          .limit(6)
+          .toArray();
+
+        res.json(tickets);
+      } catch (error) {
+        res.status(500).json({ error: error.message });
+      }
+    });
+
+    app.patch("/admin/tickets/advertise/:id", async (req, res) => {
+      try {
+        const id = req.params.id;
+        const { isAdvertised } = req.body;
+
+        const ticket = await ticketCollection.findOne({
+          _id: new ObjectId(id),
+        });
+
+        if (!ticket) {
+          return res.status(404).json({ message: "Ticket not found" });
+        }
+
+        if (isAdvertised && ticket.verificationStatus !== "approved") {
+          return res
+            .status(400)
+            .json({ message: "Only approved tickets can be advertised" });
+        }
+
+        if (isAdvertised) {
+          const count = await ticketCollection.countDocuments({
+            isAdvertised: true,
+          });
+
+          if (count >= 6) {
+            return res
+              .status(400)
+              .json({ message: "Maximum 6 tickets can be advertised" });
+          }
+        }
+
+        await ticketCollection.updateOne(
+          { _id: new ObjectId(id) },
+          { $set: { isAdvertised } },
+        );
+
+        res.json({ message: "Advertisement status updated" });
+      } catch (error) {
+        res.status(500).json({ error: error.message });
+      }
+    });
+
+    app.get("/homepage/latest-tickets", async (req, res) => {
+      try {
+        const tickets = await ticketCollection
+          .find({ verificationStatus: "approved", isHidden: false })
+          .sort({ createdAt: -1 })
+          .limit(8)
+          .toArray();
+
+        res.json(tickets);
+      } catch (error) {
+        res.status(500).json({ error: error.message });
+      }
     });
 
     app.listen(process.env.PORT || 3000, () => {
