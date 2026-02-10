@@ -385,7 +385,7 @@ async function run() {
             },
           ],
           success_url: `http://localhost:5173/payment-success?bookingId=${bookingId}&ticketId=${ticketId}&quantity=${quantity}`,
-          cancel_url: `http://localhost:5173/payment-cancel`,
+          cancel_url: `http://localhost:5173/dashboard/user/paymentCancel`,
         });
 
         res.json({ url: session.url });
