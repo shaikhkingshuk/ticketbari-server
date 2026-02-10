@@ -438,6 +438,33 @@ async function run() {
       }
     });
 
+    // GET all tickets (admin)
+    app.get("/tickets", async (req, res) => {
+      const tickets = await ticketCollection
+        .find()
+        .sort({ createdAt: -1 })
+        .toArray();
+      res.send(tickets);
+    });
+
+    // Approve or Reject ticket
+    app.patch("/tickets/:id", async (req, res) => {
+      const { status } = req.body; // approved | rejected
+      const id = req.params.id;
+
+      const result = await ticketCollection.updateOne(
+        { _id: new ObjectId(id) },
+        {
+          $set: {
+            verificationStatus: status,
+            updatedAt: new Date(),
+          },
+        },
+      );
+
+      res.send(result);
+    });
+
     app.listen(process.env.PORT || 3000, () => {
       console.log(
         `Server running on http://localhost:${process.env.PORT || 3000}`,
