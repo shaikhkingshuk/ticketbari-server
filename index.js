@@ -435,16 +435,12 @@ async function run() {
     app.get("/vendor/revenue-overview", async (req, res) => {
       try {
         const vendorEmail = req.query.email;
-
         if (!vendorEmail) {
           return res.status(400).json({ message: "Vendor email required" });
         }
 
         // Vendor tickets
-        const tickets = await ticketCollection
-          .find({ vendorEmail })
-          .project({ _id: 1 })
-          .toArray();
+        const tickets = await ticketCollection.find({ vendorEmail }).toArray();
 
         const ticketIds = tickets.map((t) => t._id.toString());
 
@@ -457,24 +453,28 @@ async function run() {
           .toArray();
 
         const totalRevenue = paidBookings.reduce(
-          (sum, b) => sum + b.price * b.bookedQuantity,
+          (sum, b) => sum + (b.price || 0) * (b.bookedQuantity || 0),
           0,
         );
 
         const totalTicketsSold = paidBookings.reduce(
-          (sum, b) => sum + b.bookedQuantity,
+          (sum, b) => sum + (b.bookedQuantity || 0),
           0,
         );
 
-        const totalTicketsAdded = tickets.length;
+        // ✅ FIX: total seats added, not number of tickets
+        const totalTicketsAdded = tickets.reduce(
+          (sum, t) => sum + (t.quantity || 0),
+          0,
+        );
 
-        // Chart data (group by date)
         const revenueByDate = {};
-
         paidBookings.forEach((b) => {
+          if (!b.paidAt) return;
           const date = new Date(b.paidAt).toLocaleDateString();
           revenueByDate[date] =
-            (revenueByDate[date] || 0) + b.price * b.bookedQuantity;
+            (revenueByDate[date] || 0) +
+            (b.price || 0) * (b.bookedQuantity || 0);
         });
 
         res.json({
@@ -599,78 +599,6 @@ async function run() {
 
       res.json({ message: "Vendor marked as fraud & tickets hidden" });
     });
-
-    // for advertising purpose///////////////////////////////////////////////////////////////////////////////////////////////////
-
-    // Admin selects 6 tickets for homepage ads
-    // app.post("/admin/homepage-ads", async (req, res) => {
-    //   try {
-    //     const { ticketIds } = req.body; // array of 6 ticket _id strings
-
-    //     if (!ticketIds || ticketIds.length !== 6) {
-    //       return res
-    //         .status(400)
-    //         .json({ message: "Exactly 6 ticket IDs required" });
-    //     }
-
-    //     // Remove existing ads
-    //     await homepageAdsCollection.deleteMany({});
-
-    //     // Insert new ads
-    //     const result = await homepageAdsCollection.insertOne({
-    //       ticketIds,
-    //       createdAt: new Date(),
-    //     });
-
-    //     res.status(201).json({
-    //       message: "Homepage ads updated",
-    //       insertedId: result.insertedId,
-    //     });
-    //   } catch (error) {
-    //     res.status(500).json({ error: error.message });
-    //   }
-    // });
-
-    // // Get homepage advertisement tickets
-    // app.get("/homepage/ads", async (req, res) => {
-    //   try {
-    //     const ads = await homepageAdsCollection.findOne(
-    //       {},
-    //       { sort: { createdAt: -1 } },
-    //     );
-
-    //     if (!ads) return res.json([]);
-
-    //     const ticketObjectIds = ads.ticketIds.map((id) => new ObjectId(id));
-
-    //     const tickets = await ticketCollection
-    //       .find({
-    //         _id: { $in: ticketObjectIds },
-    //         verificationStatus: "approved",
-    //         isHidden: false,
-    //       })
-    //       .toArray();
-
-    //     res.json(tickets);
-    //   } catch (error) {
-    //     res.status(500).json({ error: error.message });
-    //   }
-    // });
-
-    // Get latest tickets for homepage
-    // app.get("/homepage/latest-tickets", async (req, res) => {
-    //   try {
-    //     const tickets = await ticketCollection
-    //       .find({ verificationStatus: "approved", isHidden: false })
-    //       .sort({ createdAt: -1 })
-    //       .limit(8)
-    //       .toArray();
-
-    //     res.json(tickets);
-    //   } catch (error) {
-    //     res.status(500).json({ error: error.message });
-    //   }
-    // });
 
     app.get("/homepage/ads", async (req, res) => {
       try {
