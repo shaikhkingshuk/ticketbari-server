@@ -187,15 +187,54 @@ async function run() {
     });
 
     // GET all approved tickets
+    // GET all approved tickets with search, filter, sort & pagination
     app.get("/tickets", async (req, res) => {
-      const tickets = await ticketCollection
-        .find({
+      try {
+        const {
+          from,
+          to,
+          transportType,
+          sort,
+          page = 1,
+          limit = 6,
+        } = req.query;
+
+        const query = {
           verificationStatus: "approved",
           isHidden: false,
-        })
-        .toArray();
+        };
 
-      res.json(tickets);
+        // SEARCH
+        if (from) query.from = { $regex: from, $options: "i" };
+        if (to) query.to = { $regex: to, $options: "i" };
+
+        // FILTER
+        if (transportType) query.transportType = transportType;
+
+        // SORT
+        let sortQuery = {};
+        if (sort === "price_low") sortQuery.price = 1;
+        if (sort === "price_high") sortQuery.price = -1;
+
+        const skip = (Number(page) - 1) * Number(limit);
+
+        const tickets = await ticketCollection
+          .find(query)
+          .sort(sortQuery)
+          .skip(skip)
+          .limit(Number(limit))
+          .toArray();
+
+        const total = await ticketCollection.countDocuments(query);
+
+        res.json({
+          tickets,
+          total,
+          totalPages: Math.ceil(total / limit),
+        });
+      } catch (error) {
+        res.status(500).json({ error: error.message });
+      }
     });
 
     // getting single ticket details
