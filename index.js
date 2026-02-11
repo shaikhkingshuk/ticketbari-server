@@ -384,7 +384,7 @@ async function run() {
               quantity,
             },
           ],
-          success_url: `${process.env.CLIENT_URL}/payment-success?bookingId=${bookingId}&ticketId=${ticketId}&quantity=${quantity}`,
+          success_url: `${process.env.CLIENT_URL}/payment-success?bookingId=${bookingId}&ticketId=${ticketId}&quantity=${quantity}&session_id={CHECKOUT_SESSION_ID}`,
           cancel_url: `${process.env.CLIENT_URL}/dashboard/user/paymentCancel`,
         });
 
