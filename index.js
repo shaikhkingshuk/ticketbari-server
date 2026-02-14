@@ -10,6 +10,17 @@ const stripe = require("stripe")(process.env.STRIPE_SECRET_KEY);
 const PORT = process.env.PORT || 3000;
 const uri = `mongodb+srv://${process.env.DB_USER}:${process.env.DB_PASS}@cluster0.jehcuf6.mongodb.net/?appName=Cluster0`;
 
+const admin = require("firebase-admin");
+
+const serviceAccount = JSON.parse(process.env.FIREBASE_ADMIN_SDK);
+
+// Fix private key formatting (important for deployment)
+serviceAccount.private_key = serviceAccount.private_key.replace(/\\n/g, "\n");
+
+admin.initializeApp({
+  credential: admin.credential.cert(serviceAccount),
+});
+
 const client = new MongoClient(uri, {
   serverApi: {
     version: ServerApiVersion.v1,
@@ -17,6 +28,27 @@ const client = new MongoClient(uri, {
     deprecationErrors: true,
   },
 });
+
+const varifyFireBaseToken = async (req, res, next) => {
+  if (!req.headers.authorization) {
+    return res.status(401).send({ message: "Unauthorized" });
+  }
+  const fbToken = req.headers.authorization.split(" ")[1];
+
+  if (!fbToken) {
+    return res.status(401).send({ message: "Unauthorized" });
+  }
+  try {
+    const userInfo = await admin.auth().verifyIdToken(fbToken);
+
+    req.token_email = userInfo.email;
+    req.token_uid = userInfo.uid;
+
+    next();
+  } catch (errror) {
+    return res.status(401).send({ message: "Unauthorized" });
+  }
+};
 
 async function run() {
   try {
@@ -39,7 +71,6 @@ async function run() {
         const userExist = await userCollection.findOne({
           email: userData.email,
         });
-        console.log("called................");
 
         if (userExist) {
           return res.status(409).json({
@@ -79,7 +110,7 @@ async function run() {
 
     // adding tickets
 
-    app.post("/tickets", async (req, res) => {
+    app.post("/tickets", varifyFireBaseToken, async (req, res) => {
       try {
         const vendor = await userCollection.findOne({
           email: req.body.vendorEmail,
@@ -123,7 +154,7 @@ async function run() {
 
     // getting my added tickets
 
-    app.get("/tickets/vendor/:email", async (req, res) => {
+    app.get("/tickets/vendor/:email", varifyFireBaseToken, async (req, res) => {
       try {
         const email = req.params.email;
 
@@ -141,7 +172,7 @@ async function run() {
 
     // deleting tickets
 
-    app.delete("/tickets/:id", async (req, res) => {
+    app.delete("/tickets/:id", varifyFireBaseToken, async (req, res) => {
       try {
         const id = req.params.id;
 
@@ -160,7 +191,7 @@ async function run() {
     });
 
     // UPDATE ticket
-    app.patch("/tickets/:id", async (req, res) => {
+    app.patch("/tickets/:id", varifyFireBaseToken, async (req, res) => {
       try {
         const id = req.params.id;
         const updatedData = req.body;
@@ -238,7 +269,7 @@ async function run() {
     });
 
     // getting single ticket details
-    app.get("/tickets/:id", async (req, res) => {
+    app.get("/tickets/:id", varifyFireBaseToken, async (req, res) => {
       try {
         const ticket = await ticketCollection.findOne({
           _id: new ObjectId(req.params.id),
@@ -254,7 +285,7 @@ async function run() {
       }
     });
 
-    app.post("/bookings", async (req, res) => {
+    app.post("/bookings", varifyFireBaseToken, async (req, res) => {
       try {
         const booking = req.body;
 
@@ -275,7 +306,7 @@ async function run() {
 
     //vendor getting all booked tickets list
 
-    app.get("/vendor/bookings", async (req, res) => {
+    app.get("/vendor/bookings", varifyFireBaseToken, async (req, res) => {
       try {
         const vendorEmail = req.query.email;
 
@@ -305,7 +336,7 @@ async function run() {
 
     /// for accepting tickets
 
-    app.patch("/bookings/accept/:id", async (req, res) => {
+    app.patch("/bookings/accept/:id", varifyFireBaseToken, async (req, res) => {
       const id = req.params.id;
 
       const result = await bookedTicketCollection.updateOne(
@@ -322,7 +353,7 @@ async function run() {
 
     /// for rejecting tickets
 
-    app.patch("/bookings/reject/:id", async (req, res) => {
+    app.patch("/bookings/reject/:id", varifyFireBaseToken, async (req, res) => {
       const id = req.params.id;
 
       const result = await bookedTicketCollection.updateOne(
@@ -338,63 +369,71 @@ async function run() {
     });
 
     // GET My Booked Tickets (User)
-    app.get("/bookedTickets/user/:email", async (req, res) => {
-      const email = req.params.email;
+    app.get(
+      "/bookedTickets/user/:email",
+      varifyFireBaseToken,
+      async (req, res) => {
+        const email = req.params.email;
 
-      const bookings = await bookedTicketCollection
-        .find({ userEmail: email })
-        .sort({ bookedAt: -1 })
-        .toArray();
+        const bookings = await bookedTicketCollection
+          .find({ userEmail: email })
+          .sort({ bookedAt: -1 })
+          .toArray();
 
-      const ticketIds = bookings.map((b) => new ObjectId(b.ticketId));
+        const ticketIds = bookings.map((b) => new ObjectId(b.ticketId));
 
-      const tickets = await ticketCollection
-        .find({ _id: { $in: ticketIds } })
-        .toArray();
+        const tickets = await ticketCollection
+          .find({ _id: { $in: ticketIds } })
+          .toArray();
 
-      const ticketMap = {};
-      tickets.forEach((t) => {
-        ticketMap[t._id.toString()] = t;
-      });
-
-      const finalData = bookings.map((b) => ({
-        ...b,
-        ticket: ticketMap[b.ticketId],
-      }));
-
-      res.json(finalData);
-    });
-
-    app.post("/create-checkout-session", async (req, res) => {
-      const { bookingId, title, price, quantity, ticketId } = req.body;
-
-      try {
-        const session = await stripe.checkout.sessions.create({
-          payment_method_types: ["card"], // Visa, Mastercard, etc.
-          mode: "payment",
-          line_items: [
-            {
-              price_data: {
-                currency: "bdt",
-                product_data: {
-                  name: title,
-                },
-                unit_amount: price * 100, // cents
-              },
-              quantity,
-            },
-          ],
-          success_url: `${process.env.CLIENT_URL}/payment-success?bookingId=${bookingId}&ticketId=${ticketId}&quantity=${quantity}&session_id={CHECKOUT_SESSION_ID}`,
-          cancel_url: `${process.env.CLIENT_URL}/dashboard/user/paymentCancel`,
+        const ticketMap = {};
+        tickets.forEach((t) => {
+          ticketMap[t._id.toString()] = t;
         });
 
-        res.json({ url: session.url });
-      } catch (error) {
-        res.status(500).json({ error: error.message });
-      }
-    });
+        const finalData = bookings.map((b) => ({
+          ...b,
+          ticket: ticketMap[b.ticketId],
+        }));
 
-    app.patch("/bookings/pay/:id", async (req, res) => {
+        res.json(finalData);
+      },
+    );
+
+    app.post(
+      "/create-checkout-session",
+      varifyFireBaseToken,
+      async (req, res) => {
+        const { bookingId, title, price, quantity, ticketId } = req.body;
+
+        try {
+          const session = await stripe.checkout.sessions.create({
+            payment_method_types: ["card"], // Visa, Mastercard, etc.
+            mode: "payment",
+            line_items: [
+              {
+                price_data: {
+                  currency: "bdt",
+                  product_data: {
+                    name: title,
+                  },
+                  unit_amount: price * 100, // cents
+                },
+                quantity,
+              },
+            ],
+            success_url: `${process.env.CLIENT_URL}/payment-success?bookingId=${bookingId}&ticketId=${ticketId}&quantity=${quantity}&session_id={CHECKOUT_SESSION_ID}`,
+            cancel_url: `${process.env.CLIENT_URL}/dashboard/user/paymentCancel`,
+          });
+
+          res.json({ url: session.url });
+        } catch (error) {
+          res.status(500).json({ error: error.message });
+        }
+      },
+    );
+
+    app.patch("/bookings/pay/:id", varifyFireBaseToken, async (req, res) => {
       const id = req.params.id;
       const { ticketId, bookedQuantity, transactionId } = req.body;
 
@@ -417,81 +456,91 @@ async function run() {
       res.json({ message: "Payment successful" });
     });
 
-    app.get("/transactions/user/:email", async (req, res) => {
-      const email = req.params.email;
+    app.get(
+      "/transactions/user/:email",
+      varifyFireBaseToken,
+      async (req, res) => {
+        const email = req.params.email;
 
-      const transactions = await bookedTicketCollection
-        .find({
-          userEmail: email,
-          status: "paid",
-        })
-        .sort({ paidAt: -1 })
-        .toArray();
-
-      res.json(transactions);
-    });
-
-    // Revenue Overview (Vendor)
-    app.get("/vendor/revenue-overview", async (req, res) => {
-      try {
-        const vendorEmail = req.query.email;
-        if (!vendorEmail) {
-          return res.status(400).json({ message: "Vendor email required" });
-        }
-
-        // Vendor tickets
-        const tickets = await ticketCollection.find({ vendorEmail }).toArray();
-
-        const ticketIds = tickets.map((t) => t._id.toString());
-
-        // Paid bookings
-        const paidBookings = await bookedTicketCollection
+        const transactions = await bookedTicketCollection
           .find({
-            ticketId: { $in: ticketIds },
+            userEmail: email,
             status: "paid",
           })
+          .sort({ paidAt: -1 })
           .toArray();
 
-        const totalRevenue = paidBookings.reduce(
-          (sum, b) => sum + (b.price || 0) * (b.bookedQuantity || 0),
-          0,
-        );
+        res.json(transactions);
+      },
+    );
 
-        const totalTicketsSold = paidBookings.reduce(
-          (sum, b) => sum + (b.bookedQuantity || 0),
-          0,
-        );
+    // Revenue Overview (Vendor)
+    app.get(
+      "/vendor/revenue-overview",
+      varifyFireBaseToken,
+      async (req, res) => {
+        try {
+          const vendorEmail = req.query.email;
+          if (!vendorEmail) {
+            return res.status(400).json({ message: "Vendor email required" });
+          }
 
-        // ✅ FIX: total seats added, not number of tickets
-        const totalTicketsAdded = tickets.reduce(
-          (sum, t) => sum + (t.quantity || 0),
-          0,
-        );
+          // Vendor tickets
+          const tickets = await ticketCollection
+            .find({ vendorEmail })
+            .toArray();
 
-        const revenueByDate = {};
-        paidBookings.forEach((b) => {
-          if (!b.paidAt) return;
-          const date = new Date(b.paidAt).toLocaleDateString();
-          revenueByDate[date] =
-            (revenueByDate[date] || 0) +
-            (b.price || 0) * (b.bookedQuantity || 0);
-        });
+          const ticketIds = tickets.map((t) => t._id.toString());
 
-        res.json({
-          totalRevenue,
-          totalTicketsSold,
-          totalTicketsAdded,
-          revenueChart: revenueByDate,
-        });
-      } catch (error) {
-        res.status(500).json({ error: error.message });
-      }
-    });
+          // Paid bookings
+          const paidBookings = await bookedTicketCollection
+            .find({
+              ticketId: { $in: ticketIds },
+              status: "paid",
+            })
+            .toArray();
+
+          const totalRevenue = paidBookings.reduce(
+            (sum, b) => sum + (b.price || 0) * (b.bookedQuantity || 0),
+            0,
+          );
+
+          const totalTicketsSold = paidBookings.reduce(
+            (sum, b) => sum + (b.bookedQuantity || 0),
+            0,
+          );
+
+          // ✅ FIX: total seats added, not number of tickets
+          const totalTicketsAdded = tickets.reduce(
+            (sum, t) => sum + (t.quantity || 0),
+            0,
+          );
+
+          const revenueByDate = {};
+          paidBookings.forEach((b) => {
+            if (!b.paidAt) return;
+            const date = new Date(b.paidAt).toLocaleDateString();
+            revenueByDate[date] =
+              (revenueByDate[date] || 0) +
+              (b.price || 0) * (b.bookedQuantity || 0);
+          });
+
+          res.json({
+            totalRevenue,
+            totalTicketsSold,
+            totalTicketsAdded,
+            revenueChart: revenueByDate,
+          });
+        } catch (error) {
+          res.status(500).json({ error: error.message });
+        }
+      },
+    );
 
     // // GET all tickets (admin)
 
     // GET all tickets (ADMIN)
-    app.get("/admin/tickets", async (req, res) => {
+    app.get("/admin/tickets", varifyFireBaseToken, async (req, res) => {
       const tickets = await ticketCollection
         .find()
         .sort({ createdAt: -1 })
@@ -501,7 +550,7 @@ async function run() {
     });
 
     // Approve or Reject ticket (ADMIN)
-    app.patch("/admin/tickets/:id", async (req, res) => {
+    app.patch("/admin/tickets/:id", varifyFireBaseToken, async (req, res) => {
       const { status } = req.body; // approved | rejected
       const id = req.params.id;
 
@@ -518,40 +567,12 @@ async function run() {
       res.json(result);
     });
 
-    // app.get("/tickets", async (req, res) => {
-    //   const tickets = await ticketCollection
-    //     .find()
-    //     .sort({ createdAt: -1 })
-    //     .toArray();
-    //   res.send(tickets);
-    // });
-
-    // // Approve or Reject ticket
-    // app.patch("/tickets/:id", async (req, res) => {
-    //   const { status } = req.body; // approved | rejected
-    //   const id = req.params.id;
-
-    //   const result = await ticketCollection.updateOne(
-    //     { _id: new ObjectId(id) },
-    //     {
-    //       $set: {
-    //         verificationStatus: status,
-    //         updatedAt: new Date(),
-    //       },
-    //     },
-    //   );
-
-    //   res.send(result);
-    // });
-
-    // getting user info for making admin/vendor
-
     app.get("/users", async (req, res) => {
       const users = await userCollection.find().toArray();
       res.json(users);
     });
 
-    app.patch("/users/role/:id", async (req, res) => {
+    app.patch("/users/role/:id", varifyFireBaseToken, async (req, res) => {
       const { role } = req.body;
       const id = req.params.id;
 
@@ -568,7 +589,7 @@ async function run() {
       res.json(result);
     });
 
-    app.patch("/users/fraud/:id", async (req, res) => {
+    app.patch("/users/fraud/:id", varifyFireBaseToken, async (req, res) => {
       const id = req.params.id;
       const user = await userCollection.findOne({ _id: new ObjectId(id) });
 
@@ -617,47 +638,51 @@ async function run() {
       }
     });
 
-    app.patch("/admin/tickets/advertise/:id", async (req, res) => {
-      try {
-        const id = req.params.id;
-        const { isAdvertised } = req.body;
+    app.patch(
+      "/admin/tickets/advertise/:id",
+      varifyFireBaseToken,
+      async (req, res) => {
+        try {
+          const id = req.params.id;
+          const { isAdvertised } = req.body;
 
-        const ticket = await ticketCollection.findOne({
-          _id: new ObjectId(id),
-        });
-
-        if (!ticket) {
-          return res.status(404).json({ message: "Ticket not found" });
-        }
-
-        if (isAdvertised && ticket.verificationStatus !== "approved") {
-          return res
-            .status(400)
-            .json({ message: "Only approved tickets can be advertised" });
-        }
-
-        if (isAdvertised) {
-          const count = await ticketCollection.countDocuments({
-            isAdvertised: true,
+          const ticket = await ticketCollection.findOne({
+            _id: new ObjectId(id),
           });
 
-          if (count >= 6) {
+          if (!ticket) {
+            return res.status(404).json({ message: "Ticket not found" });
+          }
+
+          if (isAdvertised && ticket.verificationStatus !== "approved") {
             return res
               .status(400)
-              .json({ message: "Maximum 6 tickets can be advertised" });
+              .json({ message: "Only approved tickets can be advertised" });
           }
+
+          if (isAdvertised) {
+            const count = await ticketCollection.countDocuments({
+              isAdvertised: true,
+            });
+
+            if (count >= 6) {
+              return res
+                .status(400)
+                .json({ message: "Maximum 6 tickets can be advertised" });
+            }
+          }
+
+          await ticketCollection.updateOne(
+            { _id: new ObjectId(id) },
+            { $set: { isAdvertised } },
+          );
+
+          res.json({ message: "Advertisement status updated" });
+        } catch (error) {
+          res.status(500).json({ error: error.message });
         }
-
-        await ticketCollection.updateOne(
-          { _id: new ObjectId(id) },
-          { $set: { isAdvertised } },
-        );
-
-        res.json({ message: "Advertisement status updated" });
-      } catch (error) {
-        res.status(500).json({ error: error.message });
-      }
-    });
+      },
+    );
 
     app.get("/homepage/latest-tickets", async (req, res) => {
       try {
